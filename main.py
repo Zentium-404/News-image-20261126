@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
 """THE WORLD ON ONE PAGE - Thursday 26 November 2026.
-1024x1024 broadsheet PNG. Stdlib only. Deterministic (no dict-order, no time,
-no random): pixel buffer built from embedded glyph outlines and Natural Earth
-land rings; PNG written from scratch. Two runs, same bytes.
+
+A 1024x1024 broadsheet rendered to PNG with nothing but the standard
+library. Every pixel is decided up front: no clocks, no randomness, no
+dict iteration order leaking in. Glyph outlines ship embedded (gzipped
+base64), Natural Earth coastlines ship embedded too, and the PNG
+container is assembled by hand. Run it twice, get identical bytes.
 """
 import base64, gzip, json, math, os, struct, zlib
 
-# ============================ embedded assets ============================
+# ------------------------------------------------------------------
+# Embedded typeface. Two fonts packed in one gzip'd JSON document:
+# index 1 is the body face (caps, lower, digits, punctuation), index 2
+# is a wide display face reserved for the masthead and section heads.
+# Each glyph is (advance, rings) with coordinates in a 256-unit em.
+# ------------------------------------------------------------------
 FONT_B64 = (
     "H4sIAHGlBWsC/+y9W5M0SbOd9V+2gXHThWWcI8SVQIBAQoAOYLDhAnE2jgYIDGT8dzIi1rMys6p7vnf2wdhgMzfl83Z2V1VmhIf78uXL/zyW+vXP/+y//bO/"
     "9ectfP35n/95zF8hH//p15/ndhnz5fyBXuY/n9YyR9alNmrRVTbOH53/ff1ZPN8k1DjfJY+vGM4fh9QuY/75MHhZ/xyPrxjna/iK8w1i/Irrz6avWPefj22+"
@@ -339,6 +347,12 @@ FONT_B64 = (
     "8UL5KgqEGBev1Ju/NmH+HJbJmeAhj0+pOkWxyQiF4Lf2rGx00808QPaRtUm50IfqP/TnBhHzJy5QuV+/4QJdutaSELLRCuXr8VmdntETol1VvknB9hleBDBz"
     "Pguk2wlL/NTxgx8U3/OG/vn7X4SDp+rgoAEA"
 )
+
+# ------------------------------------------------------------------
+# Embedded land cover: Natural Earth 110m coastlines, gzipped GeoJSON
+# reduced to (features -> geometry -> coordinates). Rendered with an
+# equirectangular projection cropped above 84N so Greenland sits clean.
+# ------------------------------------------------------------------
 LAND_B64 = (
     "H4sIAJviB2sC/7S9y65sSXKm9y45jrPh90tNCUgTARKk4QFBVBezCUJVlUR1NSCK6HeXfb+Zr4jYZydaccAYZR6LtX35cjc3t+tv//HL3//933795Q+//C+/"
     "/vHv//1vv/7Db3/+869/+vu//vbXX26//PWPf+Gnv/76Tzmnv/zTn//413826p/+9t9++cN/nL/TM7df/u1vv/3br3/7+7/+qt/iD//73/76h9/+5U9/+Odf"
@@ -916,28 +930,33 @@ W = H = 1024
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT_DIR = os.path.join(HERE, "out")
 
-# ============================ palette ============================
-INK     = (18, 20, 24)
-PAPER   = (247, 245, 240)
-RULE    = (60, 62, 66)
-MID     = (120, 122, 126)
-WHITE   = (255, 255, 255)
-ME   = (168, 32, 26)    # middle east red
-CN   = (170, 68, 12)    # china orange
-US   = (22, 78, 140)    # usa blue
-MK   = (16, 110, 62)    # markets green
-UK   = (94, 44, 130)    # ukraine purple
-RU   = (110, 30, 30)    # russia maroon
-AF   = (150, 100, 10)   # africa ochre
-SP   = (10, 90, 100)    # sport teal
-HL   = (26, 28, 32)     # health slate
-TC   = (40, 90, 120)    # tech
-SC   = (90, 80, 20)     # space
-UC   = (120, 50, 110)   # us-china
-BAND = (236, 232, 224)
-SEA  = (214, 222, 228)
-LANDC= (198, 202, 200)
-EDGE = (150, 156, 156)
+# ------------------------------------------------------------------
+# Palette. Region inks double as label-chip colors so the tally strip,
+# hero band and grid all speak the same visual language.
+# ------------------------------------------------------------------
+INK   = (18, 20, 24)      # body text
+PAPER = (247, 245, 240)   # page stock
+RULE  = (60, 62, 66)      # heavy rules
+MID   = (120, 122, 126)   # captions / bylines
+WHITE = (255, 255, 255)
+
+ME = (168, 32, 26)    # middle east red
+CN = (170, 68, 12)    # china orange
+US = (22, 78, 140)    # usa blue
+MK = (16, 110, 62)    # markets green
+UK = (94, 44, 130)    # ukraine purple
+RU = (110, 30, 30)    # russia maroon
+AF = (150, 100, 10)   # africa ochre
+SP = (10, 90, 100)    # sport teal
+HL = (26, 28, 32)     # health slate
+TC = (40, 90, 120)    # tech
+SC = (90, 80, 20)     # space
+UC = (120, 50, 110)   # us-china
+
+BAND  = (236, 232, 224)   # hero band fill
+SEA   = (214, 222, 228)
+LANDC = (198, 202, 200)
+EDGE  = (150, 156, 156)
 
 REGION_COLOR = {
     "MIDDLE EAST": ME, "CHINA": CN, "UNITED STATES": US, "MARKETS": MK,
@@ -945,7 +964,10 @@ REGION_COLOR = {
     "SPORT": SP, "HEALTH": HL, "TECH": TC, "SPACE": SC,
 }
 
-# ============================ canvas ============================
+# ------------------------------------------------------------------
+# Canvas. One flat RGB bytearray, row-major. Every primitive below is
+# just a different way of stamping bytes into it.
+# ------------------------------------------------------------------
 _buf = bytearray()
 for _i in range(W * H):
     _buf += bytes(PAPER)
@@ -975,7 +997,10 @@ def frame(x0, y0, x1, y1, c, t=1):
     hline(x0, x1, y0, c, t); hline(x0, x1, y1 - t, c, t)
     vline(x0, y0, y1, c, t); vline(x1 - t, y0, y1, c, t)
 
-# ============================ polygon fill ============================
+# ------------------------------------------------------------------
+# Scanline polygon fill. Even-odd rule, one horizontal band at a time;
+# span writes go straight into the buffer instead of per-pixel calls.
+# ------------------------------------------------------------------
 def fill_polygon(pts, c):
     n = len(pts)
     if n < 3:
@@ -1007,11 +1032,15 @@ def fill_polygon(pts, c):
             for x in range(a, b + 1):
                 _buf[base + x * 3: base + x * 3 + 3] = cb
 
-# ============================ font ============================
+# ------------------------------------------------------------------
+# Glyph engine. The font doc gives (advance, ring-list) per character
+# in a 256-unit em; each ring is a closed outline we polygon-fill at
+# the requested size. Display face takes priority when asked for.
+# ------------------------------------------------------------------
 _doc = json.loads(gzip.decompress(base64.b64decode(FONT_B64)))
-F_REG = _doc[1]   # text font: caps, lower, digits, punctuation
-F_DSP = _doc[2]   # display font: wide caps for masthead and headers
-SCALE = 1.0 / 256.0   # em = 256 design units (cap height 187, descender -53)
+F_REG = _doc[1]
+F_DSP = _doc[2]
+SCALE = 1.0 / 256.0
 
 _cache = {}
 
@@ -1072,7 +1101,7 @@ def wrap(s, size, maxw, display=False):
     return lines
 
 def sanitize(s):
-    """keep glyphs the embedded font actually has; remap the rest."""
+    """map source copy onto glyphs the embedded fonts actually carry."""
     rep = {"-": "\u2014", "&": "and", ";": ",", "(": "[", ")": "]",
            "/": " \u00b7 ", "+": "plus", "X": "X", "_": " "}
     out = []
@@ -1085,7 +1114,10 @@ def sanitize(s):
             out.append(' ')
     return "".join(out)
 
-# ============================ world map ============================
+# ------------------------------------------------------------------
+# World map. Fill every land ring first, then stroke the coastlines
+# with interpolated points so long segments stay visually continuous.
+# ------------------------------------------------------------------
 _GJ = json.loads(gzip.decompress(base64.b64decode(LAND_B64)))
 
 def draw_map(x0, y0, x1, y1, sea, land, edge):
@@ -1116,7 +1148,10 @@ def draw_map(x0, y0, x1, y1, sea, land, edge):
                     px(int(pa[0] + (pb[0] - pa[0]) * t),
                        int(pa[1] + (pb[1] - pa[1]) * t), edge)
 
-# ============================ PNG writer ============================
+# ------------------------------------------------------------------
+# PNG container, assembled by hand: filter byte 0 per row, one IDAT,
+# CRC'd chunks. Same input buffer always yields the same file bytes.
+# ------------------------------------------------------------------
 def write_png(path, buf):
     raw = bytearray()
     for y in range(H):
@@ -1135,10 +1170,11 @@ def write_png(path, buf):
         f.write(chunk(b"IEND", b""))
 
 
-# ============================ layout ============================
+# ------------------------------------------------------------------
+# Page layout. Content arrives as build-time JSON (kicker, timeline,
+# numbers, leads, grid, also, footer); everything below is placement.
+# ------------------------------------------------------------------
 def build():
-    # stories data is loaded from the build-time JSON so the page stays
-    # a pure renderer: layout below is authored, content comes in as data.
     import collections
     stories = json.loads(open("/tmp/ni26-build/stories26.json").read())
 
@@ -1155,7 +1191,7 @@ def build():
     footer = sanitize(stories["footer"])
     datestr = sanitize(stories["date"])
 
-    # ---------- masthead ----------
+    # ---------- masthead: black band, centered title, numbered kicker row ----------
     rect(0, 0, W, H, PAPER)
     rect(0, 0, W, 178, INK)
     mw = text_w("THE WORLD ON ONE PAGE", 46, display=True)
@@ -1175,7 +1211,7 @@ def build():
     hline(0, W, 178, INK, 3)
 
     y_top = 186
-    # ---------- LEFT column: THE DAY IN UTC ----------
+    # ---------- LEFT column: THE DAY IN UTC + map beneath ----------
     LX0, LX1 = 40, 372
     draw_text(LX0, y_top + 16, "THE DAY IN UTC", 22, INK, display=True)
     hline(LX0, LX1, y_top + 26, INK, 2)
@@ -1192,7 +1228,7 @@ def build():
     draw_map(LX0, map_y0, LX1, map_y0 + 40, SEA, LANDC, EDGE)
     draw_text(LX0, map_y0 + 48, "THE DAY IN MAP \u00b7 NATURAL EARTH 110M COASTLINES", 10, MID)
 
-    # ---------- RIGHT panel: IN NUMBERS ----------
+    # ---------- RIGHT panel: IN NUMBERS, shrink-to-fit values ----------
     NX0, NX1 = 652, 984
     draw_text(NX0, y_top + 16, "IN NUMBERS", 22, INK, display=True)
     hline(NX0, NX1, y_top + 26, INK, 2)
@@ -1210,7 +1246,7 @@ def build():
         ny = cy + 7
         hline(NX0, NX1, ny - 6, (210, 208, 202), 1)
 
-    # ---------- HERO BAND ----------
+    # ---------- HERO BAND: lead story left, three secondary leads right ----------
     hy0 = max(ny + 16, 430)
     hy1 = hy0 + 96
     rect(40, hy0, W - 40, hy1, BAND)
@@ -1272,7 +1308,7 @@ def build():
         draw_text(tx + tw + 12, ty0 + 14, str(n), 11, INK, True)
         tx += tw + 26
 
-    # ---------- 8-story grid ----------
+    # ---------- 8-story grid, two columns ----------
     gy0 = ty1 + 10
     draw_text(40, gy0 + 16, "THE GRID \u00b7 EIGHT STORIES FROM THE WIRE", 20, INK, True)
     hline(40, W - 40, gy0 + 26, INK, 2)
@@ -1294,7 +1330,7 @@ def build():
             yy += 13
         draw_text(x0, y0 + chh - 2, g["source"], 9, MID)
 
-    # ---------- ALSO ON THE WIRE ----------
+    # ---------- ALSO ON THE WIRE: two columns, fit to remaining height ----------
     ay0 = gy + 3 * (chh + 8) + 12
     draw_text(40, ay0 + 14, "ALSO ON THE WIRE", 16, INK, True)
     hline(40, W - 40, ay0 + 20, INK, 2)
@@ -1327,4 +1363,3 @@ def build():
 
 
 build()
-
