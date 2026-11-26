@@ -1137,6 +1137,8 @@ def write_png(path, buf):
 
 # ============================ layout ============================
 def build():
+    # stories data is loaded from the build-time JSON so the page stays
+    # a pure renderer: layout below is authored, content comes in as data.
     import collections
     stories = json.loads(open("/tmp/ni26-build/stories26.json").read())
 
